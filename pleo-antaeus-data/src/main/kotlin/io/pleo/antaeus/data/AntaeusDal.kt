@@ -11,12 +11,14 @@ import io.pleo.antaeus.models.Currency
 import io.pleo.antaeus.models.Customer
 import io.pleo.antaeus.models.Invoice
 import io.pleo.antaeus.models.InvoiceStatus
+import io.pleo.antaeus.models.InvoiceStatus.PENDING
 import io.pleo.antaeus.models.Money
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
 
 class AntaeusDal(private val db: Database) {
     fun fetchInvoice(id: Int): Invoice? {
@@ -38,9 +40,36 @@ class AntaeusDal(private val db: Database) {
         }
     }
 
-    fun createInvoice(amount: Money, customer: Customer, status: InvoiceStatus = InvoiceStatus.PENDING): Invoice? {
+    fun fetchInvoicesAndChangeStatus(status: InvoiceStatus, newStatus: InvoiceStatus, limit: Int) =
+        transaction(db) {
+            val pendingInvoices = InvoiceTable
+                .select { InvoiceTable.status eq status.name }
+                .forUpdate()
+                .limit(limit)
+                .map { it.toInvoice() }
+            changeStatus(newStatus, pendingInvoices.map { it.id })
+            pendingInvoices
+        }
+
+    private fun changeStatus(newStatus: InvoiceStatus, invoices: List<Int>) =
+        InvoiceTable
+            .update(
+                where = { InvoiceTable.id inList invoices },
+                body = { it[status] = newStatus.name }
+            )
+
+    fun updateStatus(invoiceId: Int, newStatus: InvoiceStatus) =
+        transaction(db) {
+            InvoiceTable
+                .update(
+                    where = { InvoiceTable.id eq invoiceId },
+                    body = { it[status] = newStatus.name  }
+                )
+        }
+
+    fun createInvoice(amount: Money, customer: Customer, status: InvoiceStatus = PENDING): Invoice? {
         val id = transaction(db) {
-            // Insert the invoice and returns its new id.
+            // Insert the invoice and return new id.
             InvoiceTable
                 .insert {
                     it[this.value] = amount.value
@@ -72,7 +101,7 @@ class AntaeusDal(private val db: Database) {
 
     fun createCustomer(currency: Currency): Customer? {
         val id = transaction(db) {
-            // Insert the customer and return its new id.
+            // Insert the customer and return new id.
             CustomerTable.insert {
                 it[this.currency] = currency.toString()
             } get CustomerTable.id
