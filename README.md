@@ -1,4 +1,5 @@
 ## Process
+The solution submitted is to demonstrate the startegy and approach I would follow in order to solve such a problem in real world.
 
 ### Design
 Being fairly new to Kotlin, I first analyzed the architecture as shown in the read me, and looked at the code structure. Some of the challenges I found are below :
@@ -26,7 +27,7 @@ Finally, I connected both parts in `chargeAll` method. The `limitRate` operator 
 I run invoice processing tasks one by one with 10 minutes delays if today is the 1st day of a month. I am assuming that new pending invoices could appear in any moment.
 
 ## Alternative approach
+Based on my research, [Quartz Scheduler](http://www.quartz-scheduler.org) with persistent Job Store could be used for scheduling as well.
 
-* Based on my research, [Quartz Scheduler](http://www.quartz-scheduler.org) with persistent Job Store could be used for scheduling as well.
-
-
+## Remarks
+Please note that this is not a production ready solution as I have not been able to test each module thoroughly. My intention here was to be able to demonstrate my thought process and the approach I would take to build such a solution.
