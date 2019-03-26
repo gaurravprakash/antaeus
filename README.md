@@ -1,60 +1,32 @@
 ## Process
 
 ### Design
-Before I started implementation, I focused on high level architecture and how to approach batch processing 
-correctly. Some of the challenges I found here:
-* How to achieve scalability so multiple processes/threads can handle invoices without blocking each other and with avoiding double payments?
-* What if external payment service is slow and invoice volume is high? 
-* What if app is down during the time it’s scheduled to start processing and how to retry after it becomes healthy?
+Being fairly new to Kotlin, I first analyzed the architecture as shown in the read me, and looked at the code structure. Some of the challenges I found are below :
+1. Scalability.
+2. Concurrency.
+3. Reliability.
 
-At that moment I decided:
-* Application has to charge invoices simultaneously by multiple threads. In the real world `Payment Provider` would probably
-be regular REST service so we could some nonblocking http client to handle multiple requests by a single thread
-* To avoid charging the same invoices at the same time I decided to use database locking (`SELECT..FOR UPDATE`) 
-but to keep database transactions short I introduced new invoice type(`IN PROGRESS`) so the thread that fetches invoices 
-first locks rows, changes invoice statuses to `IN_PROGRESS` and commit a transaction. 
-I tested it using a real database (`postgresql`)
-* To fetch invoices from database in batches as I expect a high volume of pending invoices to process so getting all of them
-in a single query is not an option
+Below is what I proceeded with for now:
+1. Application is supposed to charge invoices simultaneously by multiple threads. In the real world Payment Provider would most likely be a regular REST service, so we can use some nonblocking http client to handle multiple requests by a single thread
+2. I decided to use database locking (`SELECT..FOR UPDATE`) for concurrency, and to keep database transactions short I introduced new invoice type enum(`IN PROGRESS`) so the thread that fetches invoices first locks rows, changes it's statuse to `IN_PROGRESS` and then commit a transaction.
 
 ### Billing Service
-I decided to use Project Reactor here because I think it's very good to orchestrate such flows in a declarative style. 
-What's more, it allows to easily wrap synchronous, blocking calls and separate them from rest of the code.
-Later we could replace blocking calls with nonblocking implementation like [reactor netty client](https://github.com/reactor/reactor-netty)
+I came across Project Reactor during research. It allows to easily wrap synchronous, blocking calls and separate them from rest of the code. Later we could replace blocking calls with nonblocking implementation like [reactor netty client](https://github.com/reactor/reactor-netty)
 and [r2dbc](https://github.com/r2dbc).
 
-Firstly, I created a pending invoices publisher. 
-It works in pull manner which means it publishes next elements only when subscriber request them (`sink.onRequest`). 
+First, I created a pending invoices publisher. 
+It works in pull manner i.e. it publishes next elements only when a subscriber request them (`sink.onRequest`). 
 Then I focused on charging a single invoice and handling all corner cases. It runs on [elastic scheduler](https://projectreactor.io/docs/core/release/api/reactor/core/scheduler/Schedulers.html#elastic--)
 that is a good choice for I/O blocking work.
-I added a timeout of 5s (could be configurable) and thought it's worth retrying 
-similar to network exception using exponential backoff strategy. 
-I assumed our external payment provider request is idempotent so it's safe to call it multiple times with the same invoice. 
-Otherwise, they would have provided `status` method or something similar.
-Finally, I connected both parts in `chargeAll` method. It's worth mentioning `limitRate` operator 
-that controls the number of rows fetched by pending invoices publisher 
-while `flatMap` enables concurrency (number of concurrent `charge` processes limited to 50 not to bring down the external payment service).
+I added a timeout of 5s (configurable) and added a retry policy similar to network exception using exponential backoff strategy. 
+I assumed our external payment provider request is safe to be called multiple times with the same invoice - Otherwise, they would have provided `status` method or something similar.
+Finally, I connected both parts in `chargeAll` method. The `limitRate` operator controls the number of rows fetched by pending invoices publisher, while `flatMap` enables concurrency (number of concurrent `charge` processes limited to 50 not to bring down the external payment service).
 
 ### Scheduling 
-I run invoice processing tasks one by one with 10 minutes delays if it's 1st day of a month. I don't know the exact requirements and 
-I assumed new pending invoices could appear in any moment.
-
-## Remarks
-This solution doesn't work with SQLite correctly because:
-1. SQLite doesn't support `SELECT ... FOR UPDATE`
-2. `org.sqlite.SQLiteException: [SQLITE_BUSY]  The database file is locked (database is locked)` is thrown - probably caused by multiple connections.
-
-I prepared [sqlite branch](https://github.com/jbibro/antaeus/tree/sqlite) where all database operations are run on the same thread.
-
-For PostgreSQL transaction isolation level could be changed to default one - `Read Committed`
+I run invoice processing tasks one by one with 10 minutes delays if today is the 1st day of a month. I am assuming that new pending invoices could appear in any moment.
 
 ## Alternative approach
 
-* I think that billing service should be separate service. It runs only once per month but consumes resources all the time.
-One idea would be to create AWS Lambda scheduled by CloudWatch Events. 
-* Other option to handle load balancing could be to evaluate some publisher/subscriber pattern. 
-One processes would fetch pending invoices and publish messages. 
-There would a job queue that would allow sharing work between multiple workers.
-* [Quartz Scheduler](http://www.quartz-scheduler.org) with persistent Job Store could be a possible solution as well
+* Based on my research, [Quartz Scheduler](http://www.quartz-scheduler.org) with persistent Job Store could be used for scheduling as well.
 
 
